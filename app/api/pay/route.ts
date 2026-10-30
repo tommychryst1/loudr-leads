@@ -1,5 +1,5 @@
 import { WhopClient } from "@whop/sdk";
-import { calculateLeadQuote, leadMetadata } from "@/lib/lead-pricing";
+import { calculateLeadQuote, leadMetadata, requestedLeadCount } from "@/lib/lead-pricing";
 import { isTopUpPlanForAmount } from "@/lib/whop-plans";
 
 export const runtime = "nodejs";
@@ -16,20 +16,21 @@ export async function POST(request: Request) {
     return Response.json({ error: "Enter a valid payment request." }, { status: 400 });
   }
 
-  const { state, leadCount, feePercent, confirmationToken, orderId, planId, currency = "usd", forceUsd = false } = body as Record<string, unknown>;
+  const input = body as Record<string, unknown>;
+  const { state, confirmationToken, orderId, planId, currency = "usd", forceUsd = false } = input;
   if (currency !== "usd" || typeof forceUsd !== "boolean") {
     return Response.json({ error: "Leads are priced in USD. Whop handles local-currency conversion at checkout." }, { status: 400 });
   }
   let quote;
   try {
-    quote = calculateLeadQuote(state, leadCount, feePercent);
+    quote = calculateLeadQuote(state, requestedLeadCount(input));
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Invalid lead order." }, { status: 400 });
   }
   if (typeof confirmationToken !== "string" || !confirmationToken.startsWith("ctok_") || confirmationToken.length > 4096) {
     return Response.json({ error: "A confirmation token is required." }, { status: 400 });
   }
-  if (typeof orderId !== "string" || !/^(?:topup|lead)_[a-z0-9]{1,32}$/.test(orderId)) {
+  if (typeof orderId !== "string" || !/^(?:topup|leads?)_[a-z0-9]{1,32}$/.test(orderId)) {
     return Response.json({ error: "A valid order reference is required." }, { status: 400 });
   }
   if (typeof planId !== "string" || !/^plan_[a-zA-Z0-9]+$/.test(planId)) {
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
   try {
     const token = process.env.WHOP_API_KEY;
     const accountId = process.env.WHOP_ACCOUNT_ID;
-    const productId = process.env.WHOP_TOPUP_PRODUCT_ID;
+    const productId = process.env.WHOP_LEADS_PRODUCT_ID;
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
     if (!token || !accountId || !productId || !siteUrl) {
       return Response.json({ error: "Payments are temporarily unavailable. Please try again later." }, { status: 503 });
@@ -54,7 +55,7 @@ export async function POST(request: Request) {
     }
     const plan = await whop.plans.retrieve({ id: planId });
     if (!isTopUpPlanForAmount(plan, accountId, productId, quote, forceUsd)) {
-      return Response.json({ error: "Your payment options do not match the lead order and fee. Please choose them again." }, { status: 400 });
+      return Response.json({ error: "Your payment options do not match the lead order. Please choose them again." }, { status: 400 });
     }
     const payment = await whop.payments.create({
       account_id: accountId,

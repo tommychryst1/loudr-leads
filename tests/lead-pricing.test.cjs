@@ -12,16 +12,17 @@ test('all 50 state prices match the supplied rate card', () => {
     const quote = calculateLeadQuote(state, 25, 2.5);
     assert.equal(quote.amount, price * 25);
     assert.equal(quote.unitPrice, price);
-    assert.equal(quote.feeCents, Math.round(price * 25 * 100 * 0.025));
+    assert.equal(quote.feeCents, 0);
+    assert.equal(quote.total, price * 25);
   }
 });
-test('rejects sold-out states, missing states, fractional/invalid counts, invalid fees and oversized orders', () => {
+test('rejects sold-out states, missing states, fractional/invalid counts and oversized orders', () => {
   for (const state of ['CA', 'DC', 'tx', '', undefined, null, 1]) assert.throws(() => calculateLeadQuote(state, 1, 2.5));
   for (const count of [undefined, null, '1', 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER]) assert.throws(() => calculateLeadQuote('TX', count, 2.5));
-  for (const fee of [undefined, null, '2.5', 2.49, 5.01, 2.555]) assert.throws(() => calculateLeadQuote('TX', 1, fee));
   assert.equal(calculateLeadQuote('TX', 1000, 5).amount, 500000);
   assert.throws(() => calculateLeadQuote('TX', 1001, 5));
-  assert.equal(calculateLeadQuote('HI', 5000, 2.5).amount, 500000);
+  assert.equal(calculateLeadQuote('HI', 1000).amount, 100000);
+  assert.throws(() => calculateLeadQuote('HI', 1001));
 });
 test('same total across states or counts remains a distinct order identity', () => {
   const tx = calculateLeadQuote('TX', 1, 2.5);
@@ -30,7 +31,9 @@ test('same total across states or counts remains a distinct order identity', () 
   assert.equal(tx.total, hi.total);
   assert.notEqual(leadQuoteKey(tx), leadQuoteKey(hi));
   assert.notEqual(leadQuoteKey(hi), leadQuoteKey(vt));
-  assert.equal(leadMetadata(tx).lead_state, 'TX');
-  assert.equal(leadMetadata(tx).lead_count, '1');
-  assert.equal(leadMetadata(tx).lead_unit_price, '500');
+  assert.equal(leadMetadata(tx).state, 'TX');
+  assert.equal(leadMetadata(tx).state_name, 'Texas');
+  assert.equal(leadMetadata(tx).source, 'loudr-leads-site');
+  assert.equal(leadMetadata(tx).quantity, '1');
+  assert.equal(leadMetadata(tx).price_per_lead, '500');
 });

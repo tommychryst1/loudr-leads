@@ -108,14 +108,29 @@ test('lead plans separate state/count identities at equal totals and preserve se
   await getTopUpPlan(client, 'biz_test', 'prod_test', quote);
   assert.equal(client.calls[1][0], 'create');
   const created = client.calls[1][1];
-  assert.equal(created.metadata.source, 'loudr-leads');
-  assert.equal(created.metadata.lead_state, 'TX');
-  assert.equal(created.metadata.lead_count, '1');
-  assert.equal(created.metadata.lead_unit_price, '500');
+  assert.equal(created.metadata.source, 'loudr-leads-site');
+  assert.equal(created.metadata.state, 'TX');
+  assert.equal(created.metadata.quantity, '1');
+  assert.equal(created.metadata.price_per_lead, '500');
   assert.match(client.calls[1][2].idempotencyKey, /loudr-leads-biz_test-prod_test-TX-1-500/);
   assert.equal(isTopUpPlanForAmount(wrongOrder, 'biz_test', 'prod_test', quote), false);
   const matching = planFor(quote, { metadata: leads.leadMetadata(quote) });
   assert.equal(isTopUpPlanForAmount(matching, 'biz_test', 'prod_test', quote), true);
   const reuse = mockClient([matching]);
   assert.equal((await getTopUpPlan(reuse, 'biz_test', 'prod_test', quote)).id, 'plan_existing');
+});
+
+
+test('lead plan lookup ignores wrong merchant or product and never repairs a legacy top-up plan', async () => {
+  const quote = leads.calculateLeadQuote('TX', 1);
+  const metadata = leads.leadMetadata(quote);
+  const client = mockClient([
+    planFor(quote, { account: { id: 'biz_other' }, metadata }),
+    planFor(quote, { product: { id: 'prod_other' }, metadata }),
+    planFor(quote),
+  ]);
+  await getTopUpPlan(client, 'biz_test', 'prod_test', quote);
+  assert.equal(client.calls[1][0], 'create');
+  assert.equal(client.calls[1][1].initial_price, 500);
+  assert.equal(client.calls[1][1].metadata.ad_spend_fee_percent, undefined);
 });

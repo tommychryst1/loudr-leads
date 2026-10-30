@@ -16,39 +16,39 @@ Open `http://localhost:3000`. Without payment environment variables, state selec
 
 ## Lead pricing and guidance
 
-`lib/lead-pricing.ts` is the shared rate card for all 50 states. California is sold out and rejected by both payment endpoints. The UI offers 1, 5, 10, 15 and 25 leads, plus custom whole-number quantities. Guidance starts after a quantity is entered and progresses to green at 50 leads. Guidance describes opportunity, not a promised conversion rate.
+`lib/lead-pricing.ts` contains the supplied rate card for all 50 states. California is sold out and rejected by both payment endpoints. Presets are 1, 5, 10, 15 and 25 leads; custom whole-number quantities from 1 through 1,000 are supported. Guidance starts after a quantity is entered and progresses to green at 50 leads. It describes opportunity, not a promised conversion rate.
 
-The base price is the selected state's per-lead price multiplied by the lead count. The existing fee behavior is retained: 2.5% by default, editable from 2.5% to 5%, with up to two decimal places. Fees round once to cents. For example, 5 Texas leads at $500 each cost $2,500 plus $62.50 at 2.5%, for $2,562.50 total. The maximum base order is $500,000; each state's quantity limit follows from its price.
+The price is the selected state's per-lead price multiplied by quantity, with **no service fee**, preserving the existing production checkout. For example, 10 Florida leads at $375 each cost $3,750. Prices are calculated using integer cents.
 
 ## Payment configuration
 
-Set these variables in `.env.local` locally and in the intended Vercel project's environment settings:
+Configure these variables in `.env.local` for local development and in the intended Vercel project for deployment:
 
 | Variable | Purpose |
 | --- | --- |
 | `WHOP_API_KEY` | Server-only Whop credential with payment and plan permissions. |
-| `WHOP_ACCOUNT_ID` | LOUDR's intended merchant account (`biz_…`). |
-| `WHOP_TOPUP_PRODUCT_ID` | Dedicated LOUDR lead product (`prod_…`); the existing variable name is retained for deployment compatibility. |
-| `NEXT_PUBLIC_WHOP_ACCOUNT_ID` | Same merchant account, used by the payment elements. |
+| `WHOP_ACCOUNT_ID` | Intended merchant account (`biz_…`). |
+| `WHOP_LEADS_PRODUCT_ID` | Dedicated LOUDR lead product (`prod_…`), matching production. |
+| `NEXT_PUBLIC_WHOP_ACCOUNT_ID` | Same merchant account, used by payment elements. |
 | `WHOP_WEBHOOK_SECRET` | Server-only signing secret for the payment webhook. |
-| `NEXT_PUBLIC_SITE_URL` | `http://localhost:3000` locally; `https://loudr-leads.vercel.app` for that production origin. |
+| `NEXT_PUBLIC_SITE_URL` | `http://localhost:3000` locally; `https://loudr-leads.vercel.app` in production. |
 
-Public variables are embedded at build time. Rebuild after changing them. The repository was inherited from an Unlimited Scaling ad-spend checkout; do not assume the inherited merchant or product belongs to LOUDR. Confirm the account, dedicated lead product and environment values before enabling live payments.
+Public variables are embedded at build time; rebuild after changing them. Existing Vercel production settings are retained. The unused ad-spend helper remains for compatibility tests but is not used to price lead orders.
 
-`/api/checkout` and the lower-level `/api/pay` accept `state`, `leadCount`, `feePercent` and the optional boolean `forceUsd`. Prices are recomputed from the server rate card; client-supplied amounts, unit prices and totals are not trusted. Missing/unknown states, California, fractional quantities, invalid fees and oversized orders are rejected before calling Whop. Old amount-only requests are no longer accepted.
+`/api/checkout` and the lower-level `/api/pay` accept `state`, `quantity` (or `leadCount`) and optional boolean `forceUsd`. If both quantity aliases are present, they must match. Amounts, unit prices, fee percentages and totals supplied by clients cannot alter the server price. Unknown states, California, missing/fractional quantities, quantities above 1,000 and non-USD nominal prices are rejected before calling Whop.
 
-Server-created plan metadata records state, quantity and unit price, along with base amount and fee. Plan matching, browser/server cache keys and creation idempotency distinguish state, quantity, price, fee and adaptive versus forced-USD mode. Orders with the same total but different states or quantities cannot reuse each other's plans. Legacy `topup_amount` and `ad_spend_fee_*` metadata names remain for compatibility; `source: loudr-leads` and `lead_state`, `lead_count`, `lead_unit_price` identify lead orders.
+Server-created plan metadata uses production-compatible `state`, `state_name`, `quantity`, `price_per_lead` and `pricing_mode` keys, plus `source: loudr-leads-site`, `currency` and `total_amount`. Plan lookup verifies merchant, product, order and pricing mode. Cache keys and idempotency distinguish state, quantity and unit price, including orders that share a total. A legacy ad-spend plan cannot be reused or repaired as a lead plan.
 
-Whop's adaptive pricing handles eligible local currencies. The Make USD button creates or selects a separate non-adaptive plan. Only EUR bank transfer, SEPA, USD bank wire and ACH are enabled, preserving the original payment-method configuration.
+Whop handles eligible local currencies. Make USD selects a separate non-adaptive plan without changing another buyer's adaptive plan. EUR bank transfer, SEPA, USD bank wire and ACH remain enabled; other payment methods remain disabled.
 
 ## Deployment and fulfillment
 
-Intended public site: `https://loudr-leads.vercel.app`. The actual Vercel project connection and deployment credentials must be verified before publishing. The repository's prior documentation referred to a different project, `unlimitedscalingwhop`; that is not a deployment target for these changes.
+Production: `https://loudr-leads.vercel.app`, project `prj_laSEpueJ84xcCcFItcwPSWCFTnc1`, team `team_nJJFw2mdvFrhMqsbZGUEOqsc` (Tommy Chryst's projects). Deploy only to this project for this repository. The older repository README's Unlimited Scaling project is unrelated to this release.
 
-Register `payment.succeeded` at `https://loudr-leads.vercel.app/api/webhooks/whop` and configure its signing secret. The webhook verifies signatures and logs payment metadata only. It does **not** deliver leads or credit balances. Fulfillment must retrieve and verify the payment and its server-authored plan (merchant, product, state, quantity, price and any currency conversion), map the buyer to a customer, and deduplicate durable work on `payment.id`. Checkout-provided metadata and return-page query parameters are not fulfillment authority.
+The signed `payment.succeeded` webhook logs payment metadata only. It does **not** deliver leads or credit balances. Fulfillment must retrieve and verify the payment and server-authored plan, map the buyer, and deduplicate durable work on `payment.id`. Checkout-provided metadata and return-page query parameters are not fulfillment authority.
 
-Run HTTPS checkout and signed webhook smoke checks against the intended configured merchant before accepting live lead orders. Unit tests and local builds do not establish live payment or fulfillment readiness.
+Unit tests validate pricing, unavailable states, quantity boundaries, no-fee totals, cache separation and plan verification. A production build is required before deployment. Payment verification must not create a real buyer charge merely to test a release.
 
 ## Branding
 
-The interface uses black, white and LOUDR yellow. `components/Brand.tsx` references the original logo published on `loudrmedia.com`, with a text fallback if the CDN image fails. A local original logo asset can replace this dependency when available.
+Black, white and LOUDR yellow are used throughout. The header uses LOUDR's published logo with a text fallback if the image fails. Quantity guidance becomes more encouraging across 1, 5, 10, 15, 25 and 50+ leads.

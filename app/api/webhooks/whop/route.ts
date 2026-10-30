@@ -16,16 +16,13 @@ async function recordPayment(payment: Record<string, unknown>) {
   // Never credit a balance from query parameters or from the return page.
   console.log("Verified payment received", {
     source: metadata?.source,
-    lead_state: metadata?.lead_state,
-    lead_count: metadata?.lead_count,
-    lead_unit_price: metadata?.lead_unit_price,
+    state: metadata?.state,
+    state_name: metadata?.state_name,
+    quantity: metadata?.quantity,
+    price_per_lead: metadata?.price_per_lead,
     payment_id: payment.id,
     order_id: metadata?.order_id,
-    topup_amount_usd: metadata?.topup_amount_usd,
-    topup_amount: metadata?.topup_amount,
     currency: metadata?.currency,
-    ad_spend_fee_percent: metadata?.ad_spend_fee_percent,
-    ad_spend_fee_amount: metadata?.ad_spend_fee_amount,
     total_amount: metadata?.total_amount,
     customer_email: payment.customer_email,
   });

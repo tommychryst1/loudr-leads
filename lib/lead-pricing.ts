@@ -1,4 +1,6 @@
-import { calculateTopUp, isValidFeePercent, MAX_TOP_UP, topUpMetadata, topUpQuoteKey, type TopUpQuote } from "@/lib/top-up";
+import { type TopUpQuote } from "@/lib/top-up";
+
+export const MAX_LEAD_QUANTITY = 1000;
 
 export const LEAD_STATES = [
   { code: "AL", name: "Alabama", price: 325 },
@@ -54,23 +56,25 @@ export const LEAD_STATES = [
 ] as const;
 
 export type LeadState = typeof LEAD_STATES[number]["code"];
-export type LeadQuote = TopUpQuote & { state: LeadState; leadCount: number; unitPrice: number };
+export type LeadQuote = TopUpQuote & { state: LeadState; stateName: string; leadCount: number; unitPrice: number; quantity: number; pricePerLead: number };
 
 export function isValidLeadState(value: unknown): value is LeadState {
   return typeof value === "string" && LEAD_STATES.some((state) => state.code === value);
 }
 
-export function calculateLeadQuote(state: unknown, leadCount: unknown, feePercent: unknown): LeadQuote {
+export function calculateLeadQuote(state: unknown, leadCount: unknown): LeadQuote {
   const selection = LEAD_STATES.find((item) => item.code === state);
   if (!selection) throw new Error("Choose a valid state.");
   if (selection.price === null) throw new Error("California leads are currently sold out. Please choose another state.");
   if (typeof leadCount !== "number" || !Number.isSafeInteger(leadCount) || leadCount < 1) {
     throw new Error("Enter a whole number of leads, starting at 1.");
   }
-  const maxCount = Math.floor(MAX_TOP_UP / selection.price);
-  if (leadCount > maxCount) throw new Error(`The maximum order for ${selection.name} is ${maxCount.toLocaleString("en-US")} leads.`);
-  if (!isValidFeePercent(feePercent)) throw new Error("Service fee must be between 2.5% and 5%, with no more than two decimal places.");
-  return { ...calculateTopUp(selection.price * leadCount, feePercent), state: selection.code, leadCount, unitPrice: selection.price };
+  if (leadCount > MAX_LEAD_QUANTITY) throw new Error(`The maximum order is ${MAX_LEAD_QUANTITY.toLocaleString("en-US")} leads.`);
+  const amountCents = selection.price * 100 * leadCount;
+  return { currency: "usd", amountCents, totalCents: amountCents, feeCents: 0, feeBasisPoints: 0,
+    amount: amountCents / 100, total: amountCents / 100, feePercent: 0, fee: 0,
+    state: selection.code, stateName: selection.name, leadCount, unitPrice: selection.price, quantity: leadCount, pricePerLead: selection.price };
+
 }
 
 export function isLeadQuote(quote: TopUpQuote | LeadQuote): quote is LeadQuote {
@@ -78,10 +82,18 @@ export function isLeadQuote(quote: TopUpQuote | LeadQuote): quote is LeadQuote {
 }
 
 export function leadQuoteKey(quote: LeadQuote): string {
-  return `${quote.state}-${quote.leadCount}-${quote.unitPrice}-${topUpQuoteKey(quote)}`;
+  return `${quote.state}-${quote.leadCount}-${quote.unitPrice}-${quote.currency}-${quote.totalCents}`;
 }
 
 export function leadMetadata(quote: LeadQuote, forceUsd = false) {
-  return { ...topUpMetadata(quote, forceUsd), source: "loudr-leads", lead_state: quote.state,
-    lead_count: String(quote.leadCount), lead_unit_price: String(quote.unitPrice) };
+  return { source: "loudr-leads-site", currency: quote.currency,
+    pricing_mode: forceUsd ? "forced_usd" : "adaptive", state: quote.state, state_name: quote.stateName,
+    quantity: String(quote.leadCount), price_per_lead: String(quote.unitPrice), total_amount: String(quote.total) };
+}
+
+export function requestedLeadCount(input: Record<string, unknown>): unknown {
+  if (input.quantity !== undefined && input.leadCount !== undefined && input.quantity !== input.leadCount) {
+    throw new Error("Quantity and lead count must match.");
+  }
+  return input.quantity !== undefined ? input.quantity : input.leadCount;
 }
