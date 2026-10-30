@@ -2,9 +2,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { loadTypeScript } = require('./load-ts.cjs');
 const pricing = loadTypeScript('lib/top-up.ts');
+const leads = loadTypeScript('lib/lead-pricing.ts', { '@/lib/top-up': pricing });
 const preferences = loadTypeScript('lib/payment-methods.ts');
 const { getTopUpPlan, isTopUpPlanForAmount } = loadTypeScript('lib/whop-plans.ts', {
-  '@/lib/payment-methods': preferences, '@/lib/top-up': pricing,
+  '@/lib/payment-methods': preferences, '@/lib/top-up': pricing, '@/lib/lead-pricing': leads,
 });
 function planFor(quote, changes = {}) {
   return { id: 'plan_existing', account: { id: 'biz_test' }, product: { id: 'prod_test' },
@@ -96,4 +97,40 @@ test('forced USD plans can be reused only for the forced USD mode', async () => 
   const client = mockClient([forced]);
   assert.equal((await getTopUpPlan(client, 'biz_test', 'prod_test', quote, true)).id, forced.id);
   assert.equal(client.calls.length, 1);
+});
+
+test('lead plans separate state/count identities at equal totals and preserve server-authored metadata', async () => {
+  const quote = leads.calculateLeadQuote('TX', 1, 2.5);
+  const other = leads.calculateLeadQuote('HI', 5, 2.5);
+  const wrongOrder = planFor(other, { metadata: leads.leadMetadata(other) });
+  const oldTopup = planFor(quote);
+  const client = mockClient([wrongOrder, oldTopup]);
+  await getTopUpPlan(client, 'biz_test', 'prod_test', quote);
+  assert.equal(client.calls[1][0], 'create');
+  const created = client.calls[1][1];
+  assert.equal(created.metadata.source, 'loudr-leads-site');
+  assert.equal(created.metadata.state, 'TX');
+  assert.equal(created.metadata.quantity, '1');
+  assert.equal(created.metadata.price_per_lead, '500');
+  assert.match(client.calls[1][2].idempotencyKey, /loudr-leads-biz_test-prod_test-TX-1-500/);
+  assert.equal(isTopUpPlanForAmount(wrongOrder, 'biz_test', 'prod_test', quote), false);
+  const matching = planFor(quote, { metadata: leads.leadMetadata(quote) });
+  assert.equal(isTopUpPlanForAmount(matching, 'biz_test', 'prod_test', quote), true);
+  const reuse = mockClient([matching]);
+  assert.equal((await getTopUpPlan(reuse, 'biz_test', 'prod_test', quote)).id, 'plan_existing');
+});
+
+
+test('lead plan lookup ignores wrong merchant or product and never repairs a legacy top-up plan', async () => {
+  const quote = leads.calculateLeadQuote('TX', 1);
+  const metadata = leads.leadMetadata(quote);
+  const client = mockClient([
+    planFor(quote, { account: { id: 'biz_other' }, metadata }),
+    planFor(quote, { product: { id: 'prod_other' }, metadata }),
+    planFor(quote),
+  ]);
+  await getTopUpPlan(client, 'biz_test', 'prod_test', quote);
+  assert.equal(client.calls[1][0], 'create');
+  assert.equal(client.calls[1][1].initial_price, 500);
+  assert.equal(client.calls[1][1].metadata.ad_spend_fee_percent, undefined);
 });

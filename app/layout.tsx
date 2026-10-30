@@ -3,9 +3,9 @@ import { preloadHints } from "@whop/elements";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Top up your ad spend | Unlimited Scaling",
+  title: "Build your pipeline | LOUDR Media",
   description:
-    "Keep your next period moving. Securely top up your Unlimited Scaling ad spend with a payment method that works for you.",
+    "Choose your lead volume with LOUDR Media. More leads, more conversations, more opportunity.",
   robots: { index: false, follow: false },
 };
 
