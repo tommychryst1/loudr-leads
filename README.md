@@ -35,7 +35,7 @@ Configure these variables in `.env.local` for local development and in the inten
 
 Public variables are embedded at build time; rebuild after changing them. Existing Vercel production settings are retained. The unused ad-spend helper remains for compatibility tests but is not used to price lead orders.
 
-`/api/checkout` and the lower-level `/api/pay` accept `state`, `quantity` (or `leadCount`) and optional boolean `forceUsd`. If both quantity aliases are present, they must match. Amounts, unit prices, fee percentages and totals supplied by clients cannot alter the server price. Unknown states, California, missing/fractional quantities, quantities above 1,000 and non-USD nominal prices are rejected before calling Whop.
+`/api/checkout` and the lower-level `/api/pay` accept `state`, `quantity` (or `leadCount`) and optional boolean `forceUsd`. If both quantity aliases are present, they must match. Amounts, unit prices, fee percentages and totals supplied by clients cannot alter the server price. Unknown or sold-out states, missing/fractional quantities, quantities above 1,000 and non-USD nominal prices are rejected before calling Whop.
 
 Server-created plan metadata uses production-compatible `state`, `state_name`, `quantity`, `price_per_lead` and `pricing_mode` keys, plus `source: loudr-leads-site`, `currency` and `total_amount`. Plan lookup verifies merchant, product, order and pricing mode. Cache keys and idempotency distinguish state, quantity and unit price, including orders that share a total. A legacy ad-spend plan cannot be reused or repaired as a lead plan.
 
@@ -52,3 +52,13 @@ Unit tests validate pricing, unavailable states, quantity boundaries, no-fee tot
 ## Branding
 
 Black, white and LOUDR yellow are used throughout. The header uses LOUDR's published logo with a text fallback if the image fails. Quantity guidance becomes more encouraging across 1, 5, 10, 15, 25 and 50+ leads.
+
+## State pricing admin
+
+`/admin` edits the shared rate card in the private Blob object `pricing/state-prices.json`. The Vercel project is connected to the `loudr-lead-pricing` store; its server-only `BLOB_READ_WRITE_TOKEN` is managed by Vercel. No price edits are stored in the browser or bundled into a deployment. Missing objects use the initial rate card; unreadable storage fails with an error rather than silently charging an old price.
+
+Each save sends changed states and the last-read ETag. Conditional writes reject concurrent changes with HTTP 409 so one editor cannot silently overwrite another. Prices support cents, must be $0.01–$10,000 per lead, and can be marked sold out. Reset discards unsaved edits. Saved values apply to new checkouts; payment sessions already opened keep their quoted price.
+
+`/api/prices` returns current public prices without caching. The checkout refreshes its displayed rate card on focus and periodically, and every new plan request rechecks server-side prices. An outdated `priceVersion` returns 409 and asks the buyer to review the new total. Plan-cache keys include the computed price; the guarded legacy payment route also validates against the current rate card.
+
+The owner explicitly requested open admin for this first release. `ADMIN_ACCESS_MODE=open` enables its API. `lib/admin-auth.ts` centralizes this temporary policy and same-origin write checks; replace it with verified Whop OAuth sessions and business team-membership checks before restricting access to staff. The flag is not authentication: while open, any visitor can edit prices.

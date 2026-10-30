@@ -90,10 +90,10 @@ test('lead orders at the same total keep separate cached plans by state and quan
   const leads = loadTypeScript('lib/lead-pricing.ts', { '@/lib/top-up': pricing });
   let calls = 0;
   const prepare = create(async () => `plan_${++calls}`, leads.leadQuoteKey);
-  const alabama = leads.calculateLeadQuote('AL', 1, 2.5);
-  const alaska = leads.calculateLeadQuote('AK', 1, 2.5);
-  const texas = leads.calculateLeadQuote('TX', 1, 2.5);
-  const idaho = leads.calculateLeadQuote('ID', 2, 2.5);
+  const alabama = leads.calculateLeadQuote('AL', 1);
+  const alaska = leads.calculateLeadQuote('AK', 1);
+  const texas = leads.calculateLeadQuote('TX', 1);
+  const idaho = leads.calculateLeadQuote('ID', 2);
   assert.equal(await prepare(alabama), 'plan_1');
   assert.equal(await prepare(alaska), 'plan_2');
   assert.equal(await prepare(texas), 'plan_3');
