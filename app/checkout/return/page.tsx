@@ -3,7 +3,7 @@ import Link from "next/link";
 import Brand from "@/components/Brand";
 import { ArrowIcon } from "@/components/Icons";
 
-export const metadata: Metadata = { title: "Payment update | Unlimited Scaling" };
+export const metadata: Metadata = { title: "Payment update | LOUDR Media" };
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -28,14 +28,14 @@ export default async function CheckoutReturn({ searchParams }: { searchParams: S
           </div>
           <h1 id="return-heading">{succeeded ? "Funds received" : failed ? "Payment didn’t go through." : "Confirming your payment"}</h1>
           <p className="return-description">
-            {succeeded ? "Thank you for fueling your next phase of growth. Your ad budget will be credited once your payment is verified." : failed ? "You weren’t charged. Head back to choose an amount and try again." : "Your payment is being confirmed. Bank transfers and wires typically take 1–3 business days to settle. Your budget will be credited once the funds arrive."}
+            {succeeded ? "Thank you for fueling your next phase of growth. Your lead order will be reviewed once your payment is verified." : failed ? "You weren’t charged. Head back to choose your leads and try again." : "Your payment is being confirmed. Bank transfers and wires typically take 1–3 business days to settle. Your lead order will be reviewed once the funds arrive."}
           </p>
           {(reference || succeeded) && <dl className="reference"><dt>Payment reference</dt><dd>{reference || "Your reference will appear in your payment receipt."}</dd></dl>}
-          <Link href="/" className="primary-button">{failed ? "Try again" : "Back to Unlimited Scaling"}<ArrowIcon /></Link>
-          <p className="return-fineprint">This page is a payment update. Balance credits depend on verified payment confirmation.</p>
+          <Link href="/" className="primary-button">{failed ? "Try again" : "Back to LOUDR Media"}<ArrowIcon /></Link>
+          <p className="return-fineprint">This page is a payment update. Orders depend on verified payment confirmation.</p>
         </section>
       </main>
-      <footer className="site-footer"><span>© {new Date().getFullYear()} Unlimited Scaling</span><span>Built for your next level.</span></footer>
+      <footer className="site-footer"><span>© {new Date().getFullYear()} LOUDR Media</span><span>Built for your next level.</span></footer>
     </div>
   );
 }

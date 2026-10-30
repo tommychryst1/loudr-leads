@@ -2,36 +2,37 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { loadTypeScript } = require('./load-ts.cjs');
 const pricing = loadTypeScript('lib/top-up.ts');
+const leads = loadTypeScript('lib/lead-pricing.ts', { '@/lib/top-up': pricing });
 const preferences = loadTypeScript('lib/payment-methods.ts');
-const plans = loadTypeScript('lib/whop-plans.ts', { '@/lib/payment-methods': preferences, '@/lib/top-up': pricing });
+const plans = loadTypeScript('lib/whop-plans.ts', { '@/lib/payment-methods': preferences, '@/lib/top-up': pricing, '@/lib/lead-pricing': leads });
 const env = { WHOP_API_KEY: 'test-key', WHOP_ACCOUNT_ID: 'biz_test', WHOP_TOPUP_PRODUCT_ID: 'prod_test', NEXT_PUBLIC_SITE_URL: 'https://example.com' };
 const request = (body) => new Request('https://example.com/api/test', { method: 'POST', body: JSON.stringify(body) });
 function checkoutRoute() {
   const calls = [];
   const { POST } = loadTypeScript('app/api/checkout/route.ts', {
-    '@/lib/top-up': pricing,
+    '@/lib/top-up': pricing, '@/lib/lead-pricing': leads,
     '@/lib/whop-plans': { getTopUpPlan: async (_, account, product, quote, forceUsd) => { calls.push({ account, product, quote, forceUsd }); return { id: 'plan_test' }; } },
     '@whop/sdk': { WhopClient: class {} }, 'next/cache': { unstable_cache: (fn) => fn },
   }, { process: { env } });
   return { POST, calls };
 }
 function payRoute(planChange = {}) {
-  const quote = pricing.calculateTopUp(1000, 2.5);
+  const quote = leads.calculateLeadQuote('TX', 2, 2.5);
   const plan = { id: 'plan_test', account: { id: 'biz_test' }, product: { id: 'prod_test' }, currency: 'usd', initial_price: 1025,
-    plan_type: 'one_time', visibility: 'quick_link', adaptive_pricing_enabled: true, metadata: pricing.topUpMetadata(quote), payment_method_configuration: preferences.topUpPaymentConfiguration, ...planChange };
+    plan_type: 'one_time', visibility: 'quick_link', adaptive_pricing_enabled: true, metadata: leads.leadMetadata(quote), payment_method_configuration: preferences.topUpPaymentConfiguration, ...planChange };
   const charges = [];
   const client = { confirmationTokens: { retrieve: async () => ({ status: 'pending' }) }, plans: { retrieve: async () => plan },
     payments: { create: async (input) => { charges.push(input); return { id: 'pay_test', status: 'pending' }; } } };
   const { POST } = loadTypeScript('app/api/pay/route.ts', {
-    '@/lib/top-up': pricing, '@/lib/whop-plans': plans,
+    '@/lib/top-up': pricing, '@/lib/lead-pricing': leads, '@/lib/whop-plans': plans,
     '@whop/sdk': { WhopClient: class { constructor() { return client; } } },
   }, { process: { env } });
   return { POST, charges };
 }
-const validPayment = { amount: 1000, feePercent: 2.5, currency: 'usd', confirmationToken: 'ctok_test', orderId: 'topup_test', planId: 'plan_test' };
+const validPayment = { state: 'TX', leadCount: 2, feePercent: 2.5, currency: 'usd', confirmationToken: 'ctok_test', orderId: 'topup_test', planId: 'plan_test' };
 test('checkout calculates total on the server and ignores a supplied fake total', async () => {
   const { POST, calls } = checkoutRoute();
-  const response = await POST(request({ amount: 1000, feePercent: 2.5, total: 1 }));
+  const response = await POST(request({ state: 'TX', leadCount: 2, feePercent: 2.5, amount: 1, unitPrice: 1, total: 1 }));
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.quote.total, 1025);
@@ -55,6 +56,9 @@ test('charge uses the fee-inclusive plan and separate ad spend metadata', async 
   assert.equal(charges.length, 1);
   assert.equal(charges[0].plan_id, 'plan_test');
   assert.equal(charges[0].metadata.topup_amount, '1000');
+  assert.equal(charges[0].metadata.lead_state, 'TX');
+  assert.equal(charges[0].metadata.lead_count, '2');
+  assert.equal(charges[0].metadata.lead_unit_price, '500');
   assert.equal(charges[0].metadata.ad_spend_fee_percent, '2.5');
   assert.equal(charges[0].metadata.ad_spend_fee_amount, '25');
   assert.equal(charges[0].metadata.total_amount, '1025');
@@ -69,11 +73,29 @@ test('charge rejects a plan with an unmarked-up price or another business', asyn
 
 test('checkout accepts the USD override without changing base spend or the fee', async () => {
   const { POST, calls } = checkoutRoute();
-  const response = await POST(request({ amount: 100000, feePercent: 5, forceUsd: true }));
+  const response = await POST(request({ state: 'TX', leadCount: 200, feePercent: 5, forceUsd: true }));
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.forceUsd, true);
   assert.equal(body.quote.total, 105000);
   assert.equal(calls[0].quote.currency, 'usd');
   assert.equal(calls[0].forceUsd, true);
+});
+
+test('both endpoints reject sold-out states, invalid counts and old amount-only requests before Whop', async () => {
+  for (const extra of [{ state: 'CA' }, { state: 'DC' }, { state: null }, { state: 'tx' }, { leadCount: 0 }, { leadCount: 1.5 }, { leadCount: '2' }, { leadCount: 1001 }, { state: undefined, leadCount: undefined, amount: 1000 }]) {
+    const checkout = checkoutRoute();
+    const pay = payRoute();
+    assert.equal((await checkout.POST(request({ ...validPayment, ...extra }))).status, 400);
+    assert.equal((await pay.POST(request({ ...validPayment, ...extra }))).status, 400);
+    assert.equal(checkout.calls.length, 0);
+    assert.equal(pay.charges.length, 0);
+  }
+});
+test('charge rejects another lead order even when its monetary total matches', async () => {
+  for (const replacement of [leads.calculateLeadQuote('HI', 10, 2.5), leads.calculateLeadQuote('VT', 10, 2.5)]) {
+    const { POST, charges } = payRoute({ metadata: leads.leadMetadata(replacement) });
+    assert.equal((await POST(request(validPayment))).status, 400);
+    assert.equal(charges.length, 0);
+  }
 });

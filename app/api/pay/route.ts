@@ -1,5 +1,5 @@
 import { WhopClient } from "@whop/sdk";
-import { calculateTopUp, isValidAmount, isValidFeePercent, topUpMetadata } from "@/lib/top-up";
+import { calculateLeadQuote, leadMetadata } from "@/lib/lead-pricing";
 import { isTopUpPlanForAmount } from "@/lib/whop-plans";
 
 export const runtime = "nodejs";
@@ -16,21 +16,20 @@ export async function POST(request: Request) {
     return Response.json({ error: "Enter a valid payment request." }, { status: 400 });
   }
 
-  const { amount, feePercent, confirmationToken, orderId, planId, currency = "usd", forceUsd = false } = body as Record<string, unknown>;
-  if (!isValidAmount(amount)) {
-    return Response.json({ error: "Top-up amount must be between 100 and 500,000 in the chosen currency, with no more than two decimal places." }, { status: 400 });
-  }
-  if (!isValidFeePercent(feePercent)) {
-    return Response.json({ error: "Ad spend fee must be between 2.5% and 5%, with no more than two decimal places." }, { status: 400 });
-  }
+  const { state, leadCount, feePercent, confirmationToken, orderId, planId, currency = "usd", forceUsd = false } = body as Record<string, unknown>;
   if (currency !== "usd" || typeof forceUsd !== "boolean") {
-    return Response.json({ error: "Top-ups are priced in USD. Whop handles local-currency conversion at checkout." }, { status: 400 });
+    return Response.json({ error: "Leads are priced in USD. Whop handles local-currency conversion at checkout." }, { status: 400 });
   }
-  const quote = calculateTopUp(amount, feePercent);
+  let quote;
+  try {
+    quote = calculateLeadQuote(state, leadCount, feePercent);
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "Invalid lead order." }, { status: 400 });
+  }
   if (typeof confirmationToken !== "string" || !confirmationToken.startsWith("ctok_") || confirmationToken.length > 4096) {
     return Response.json({ error: "A confirmation token is required." }, { status: 400 });
   }
-  if (typeof orderId !== "string" || !/^topup_[a-z0-9]{1,32}$/.test(orderId)) {
+  if (typeof orderId !== "string" || !/^(?:topup|lead)_[a-z0-9]{1,32}$/.test(orderId)) {
     return Response.json({ error: "A valid order reference is required." }, { status: 400 });
   }
   if (typeof planId !== "string" || !/^plan_[a-zA-Z0-9]+$/.test(planId)) {
@@ -55,14 +54,14 @@ export async function POST(request: Request) {
     }
     const plan = await whop.plans.retrieve({ id: planId });
     if (!isTopUpPlanForAmount(plan, accountId, productId, quote, forceUsd)) {
-      return Response.json({ error: "Your payment options do not match the top-up amount and fee. Please choose them again." }, { status: 400 });
+      return Response.json({ error: "Your payment options do not match the lead order and fee. Please choose them again." }, { status: 400 });
     }
     const payment = await whop.payments.create({
       account_id: accountId,
       confirmation_token: confirmationToken,
       plan_id: plan.id,
       return_url: returnUrl,
-      metadata: { ...topUpMetadata(quote, forceUsd), order_id: orderId },
+      metadata: { ...leadMetadata(quote, forceUsd), order_id: orderId },
     });
 
     return Response.json({ id: payment.id, status: payment.status, client_secret: payment.client_secret }, {

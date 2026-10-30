@@ -84,3 +84,20 @@ test('adaptive and forced USD preparation are cached separately', async () => {
   assert.equal(await prepare(quote()), 'plan_adaptive');
   assert.equal(calls, 2);
 });
+
+test('lead orders at the same total keep separate cached plans by state and quantity', async () => {
+  const { create } = loadPreparer();
+  const leads = loadTypeScript('lib/lead-pricing.ts', { '@/lib/top-up': pricing });
+  let calls = 0;
+  const prepare = create(async () => `plan_${++calls}`, leads.leadQuoteKey);
+  const alabama = leads.calculateLeadQuote('AL', 1, 2.5);
+  const alaska = leads.calculateLeadQuote('AK', 1, 2.5);
+  const texas = leads.calculateLeadQuote('TX', 1, 2.5);
+  const idaho = leads.calculateLeadQuote('ID', 2, 2.5);
+  assert.equal(await prepare(alabama), 'plan_1');
+  assert.equal(await prepare(alaska), 'plan_2');
+  assert.equal(await prepare(texas), 'plan_3');
+  assert.equal(await prepare(idaho), 'plan_4');
+  assert.equal(await prepare(alabama), 'plan_1');
+  assert.equal(calls, 4);
+});

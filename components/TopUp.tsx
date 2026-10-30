@@ -4,26 +4,25 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { loadWhop } from "@whop/elements";
 import { Checkout, CheckoutElement, WhopElements } from "@whop/elements-react";
 import { ArrowIcon, LockIcon } from "@/components/Icons";
-import { calculateTopUp, formatAmount, isValidAmount, isValidFeePercent, MAX_FEE_PERCENT, MAX_TOP_UP, MIN_FEE_PERCENT, MIN_TOP_UP, topUpMetadata, type TopUpCurrency } from "@/lib/top-up";
+import { formatAmount, isValidFeePercent, MAX_FEE_PERCENT, MAX_TOP_UP, MIN_FEE_PERCENT } from "@/lib/top-up";
+import { calculateLeadQuote, LEAD_STATES, leadMetadata, leadQuoteKey, type LeadQuote } from "@/lib/lead-pricing";
+import { isValidLeadCount } from "@/lib/leads";
+import LeadSelector from "@/components/LeadSelector";
 import { createPlanPreparer } from "@/lib/checkout-preparation";
 
-const presets = [10_000, 25_000, 50_000, 75_000, 100_000];
 const appearance = {
-  theme: { appearance: "dark" as const, accentColor: "blue" as const, grayColor: "slate" as const },
+  theme: { appearance: "dark" as const, accentColor: "yellow" as const, grayColor: "gray" as const },
 };
 
-function amountError(value: string, currency: TopUpCurrency): string | null {
-  if (!value.trim()) return "Enter an amount to continue.";
-  const amount = Number(value);
-  if (!Number.isFinite(amount)) return "Enter a valid amount.";
-  if (amount < MIN_TOP_UP) return `The minimum top-up is ${formatAmount(MIN_TOP_UP, currency)}.`;
-  if (amount > MAX_TOP_UP) return `The maximum top-up is ${formatAmount(MAX_TOP_UP, currency)}.`;
-  if (!isValidAmount(amount)) return "Use no more than two decimal places.";
+function amountError(value: string, max: number): string | null {
+  if (!value.trim()) return "Choose how many leads you’d like.";
+  if (!isValidLeadCount(Number(value))) return "Enter a whole number of leads, starting at 1.";
+  if (Number(value) > max) return `Choose up to ${max.toLocaleString("en-US")} leads for this state.`;
   return null;
 }
 
 function feeError(value: string): string | null {
-  if (!value.trim()) return "Enter an ad spend fee.";
+  if (!value.trim()) return "Enter a service fee.";
   if (!isValidFeePercent(Number(value))) return "Enter a fee from 2.5% to 5%, using up to two decimal places.";
   return null;
 }
@@ -33,7 +32,10 @@ function errorMessage(error: unknown): string {
 }
 
 export default function TopUp() {
-  const [value, setValue] = useState("10000");
+  const [value, setValue] = useState("");
+  const [state, setState] = useState("");
+  const [stateTouched, setStateTouched] = useState(false);
+  const stateRef = useRef<HTMLSelectElement>(null);
   const [feeValue, setFeeValue] = useState("2.5");
   const [feeTouched, setFeeTouched] = useState(false);
   const currency = "usd" as const;
@@ -51,30 +53,37 @@ export default function TopUp() {
   const preparingRef = useRef(false);
   const [loadError, setLoadError] = useState<{ retry: () => void } | null>(null);
   const [elements, setElements] = useState<ReturnType<typeof loadWhop> | null>(null);
-  const [preparePlan] = useState(() => createPlanPreparer(async (quote, forceUsd) => {
+  const [preparePlan] = useState(() => createPlanPreparer<LeadQuote>(async (quote, forceUsd) => {
     const result = await fetch("/api/checkout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount: quote.amount, feePercent: quote.feePercent, forceUsd }),
+      body: JSON.stringify({ state: quote.state, leadCount: quote.leadCount, feePercent: quote.feePercent, forceUsd }),
       signal: AbortSignal.timeout(15_000),
     });
     const response = await result.json();
     if (!result.ok || typeof response.planId !== "string" || !/^plan_[a-zA-Z0-9]+$/.test(response.planId) ||
+      response.quote?.state !== quote.state || response.quote?.leadCount !== quote.leadCount || response.quote?.unitPrice !== quote.unitPrice ||
       response.quote?.totalCents !== quote.totalCents || response.quote?.amountCents !== quote.amountCents ||
       response.quote?.feeBasisPoints !== quote.feeBasisPoints || response.quote?.currency !== "usd" || response.forceUsd !== forceUsd) {
       throw new Error(response.error || "We couldn’t load payment options. Please try again.");
     }
     return response.planId as string;
-  }));
+  }, leadQuoteKey));
   const inputRef = useRef<HTMLInputElement>(null);
   const feeRef = useRef<HTMLInputElement>(null);
   const paymentTitleRef = useRef<HTMLHeadingElement>(null);
-  const dollars = Number(value);
+  const leadCount = Number(value);
+  const selectedState = LEAD_STATES.find((item) => item.code === state);
+  const maxLeads = selectedState?.price ? Math.floor(MAX_TOP_UP / selectedState.price) : 5000;
+  const stateError = stateTouched && !selectedState ? "Choose a state to see your price." : selectedState?.price === null ? "California is sold out. Please choose another state." : null;
   const feePercent = Number(feeValue);
   const feeInputError = feeTouched ? feeError(feeValue) : null;
-  const quote = useMemo(() => isValidAmount(dollars) && isValidFeePercent(feePercent) ? calculateTopUp(dollars, feePercent, currency) : null, [dollars, feePercent, currency]);
-  const checkoutMetadata = useMemo(() => quote ? { ...topUpMetadata(quote, forceUsd), order_id: orderId } : undefined, [quote, forceUsd, orderId]);
-  const error = (touched ? amountError(value, currency) : null);
+  const quote = useMemo(() => {
+    try { return calculateLeadQuote(state, leadCount, feePercent); }
+    catch { return null; }
+  }, [state, leadCount, feePercent]);
+  const checkoutMetadata = useMemo(() => quote ? { ...leadMetadata(quote, forceUsd), order_id: orderId } : undefined, [quote, forceUsd, orderId]);
+  const error = (touched ? amountError(value, maxLeads) : null);
   const accountId = process.env.NEXT_PUBLIC_WHOP_ACCOUNT_ID;
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
   const configured = Boolean(accountId?.startsWith("biz_") && siteUrl);
@@ -99,7 +108,9 @@ export default function TopUp() {
     event.preventDefault();
     setTouched(true);
     setFeeTouched(true);
-    if (amountError(value, currency)) {
+    setStateTouched(true);
+    if (!selectedState || selectedState.price === null) { stateRef.current?.focus(); return; }
+    if (amountError(value, maxLeads)) {
       inputRef.current?.focus();
       return;
     }
@@ -117,7 +128,7 @@ export default function TopUp() {
         setCheckoutLoading(true);
         setCompleted(false);
       }
-      setOrderId(`topup_${Date.now().toString(36)}`);
+      setOrderId(`lead_${Date.now().toString(36)}`);
       setStep("payment");
     } catch (error) {
       setCheckoutError(errorMessage(error));
@@ -164,69 +175,49 @@ export default function TopUp() {
         {step === "amount" ? (
           <form onSubmit={continueToPayment} noValidate aria-busy={preparing}>
             <h2 className="panel-title">Make room for more.</h2>
-            <p className="panel-description">Choose how much you’d like to add.</p>
+            <p className="panel-description">Choose your state and how many leads you’d like.</p>
 
-            <label className="amount-label" htmlFor="amount">Top-up amount <span>{currency.toUpperCase()}</span></label>
-            <div className={`amount-field${error ? " has-error" : ""}`}>
-              <span className="currency-symbol" aria-hidden="true">$</span>
-              <input
-                id="amount"
-                name="amount"
-                ref={inputRef}
-                type="number"
-                inputMode="decimal"
-                min={MIN_TOP_UP}
-                max={MAX_TOP_UP}
-                step="0.01"
-                value={value}
-                disabled={preparing}
-                onChange={(event) => { setValue(event.target.value); setTouched(true); }}
-                onBlur={() => setTouched(true)}
-                aria-invalid={Boolean(error)}
-                aria-describedby={error ? "amount-error amount-hint" : "amount-hint"}
-                autoComplete="off"
-                placeholder="0"
-              />
-            </div>
-            <div className="amount-help">
-              <p id="amount-hint">{formatAmount(MIN_TOP_UP, currency)} minimum <span>·</span> $500,000 maximum</p>
-              {error && <p className="form-error" id="amount-error" role="alert">{error}</p>}
-            </div>
-
-            <div className="preset-grid" aria-label="Suggested top-up amounts">
-              {presets.map((amount) => (
-                <button key={amount} className={`preset${dollars === amount ? " selected" : ""}`} type="button" disabled={preparing} aria-pressed={dollars === amount} onClick={() => { setValue(String(amount)); setTouched(true); }}>
-                  ${amount / 1000}k
-                </button>
-              ))}
-            </div>
+            <label className="state-label" htmlFor="lead-state">Your state</label>
+            <select id="lead-state" className="state-field" ref={stateRef} value={state} disabled={preparing}
+              onChange={(event) => { setState(event.target.value); setStateTouched(true); setCheckoutError(null); }}
+              onBlur={() => setStateTouched(true)} aria-invalid={Boolean(stateError)}
+              aria-describedby={stateError ? "state-error" : undefined}>
+              <option value="" disabled>Select your state</option>
+              {LEAD_STATES.map((item) => <option key={item.code} value={item.code} disabled={item.price === null}>
+                {item.name} ({item.code}) — {item.price === null ? "Sold out" : `${formatAmount(item.price)} / lead`}
+              </option>)}
+            </select>
+            {stateError && <p id="state-error" className="form-error" role="alert">{stateError}</p>}
+            <LeadSelector value={value} onChange={(next) => { setValue(next); setTouched(true); setCheckoutError(null); }}
+              onBlur={() => setTouched(true)} error={error} disabled={preparing} max={maxLeads} inputRef={inputRef} />
 
             <div className="fee-settings">
-              <div><label htmlFor="ad-spend-fee">Ad spend fee (%)</label><p id="fee-hint">2.5%–5% of your ad spend</p></div>
+              <div><label htmlFor="service-fee">Service fee (%)</label><p id="fee-hint">2.5%–5% of your lead subtotal</p></div>
               <div className={`fee-field${feeInputError ? " has-error" : ""}`}>
-                <input id="ad-spend-fee" name="feePercent" ref={feeRef} type="number" inputMode="decimal" min={MIN_FEE_PERCENT} max={MAX_FEE_PERCENT} step="0.01" value={feeValue} disabled={preparing} onChange={(event) => { setFeeValue(event.target.value); setFeeTouched(true); }} onBlur={() => setFeeTouched(true)} aria-invalid={Boolean(feeInputError)} aria-describedby={feeInputError ? "fee-error fee-hint" : "fee-hint"} />
+                <input id="service-fee" name="feePercent" ref={feeRef} type="number" inputMode="decimal" min={MIN_FEE_PERCENT} max={MAX_FEE_PERCENT} step="0.01" value={feeValue} disabled={preparing} onChange={(event) => { setFeeValue(event.target.value); setFeeTouched(true); }} onBlur={() => setFeeTouched(true)} aria-invalid={Boolean(feeInputError)} aria-describedby={feeInputError ? "fee-error fee-hint" : "fee-hint"} />
                 <span aria-hidden="true">%</span>
               </div>
             </div>
             {feeInputError && <p className="form-error" id="fee-error" role="alert">{feeInputError}</p>}
             <div className="quote-summary" aria-live="polite">
-              <div><span>Ad spend top-up</span><span>{isValidAmount(dollars) ? formatAmount(dollars, currency) : "—"}</span></div>
-              <div><span>Ad spend fee{quote ? ` (${quote.feePercent}%)` : ""}</span><span>{quote ? formatAmount(quote.fee, currency) : "—"}</span></div>
+              <div><span>Price per lead{selectedState ? ` (${selectedState.code})` : ""}</span><span>{selectedState?.price ? formatAmount(selectedState.price) : "—"}</span></div>
+              <div><span>Lead subtotal{quote ? ` (${quote.leadCount} ${quote.leadCount === 1 ? "lead" : "leads"})` : ""}</span><span>{quote ? formatAmount(quote.amount, currency) : "—"}</span></div>
+              <div><span>Service fee{quote ? ` (${quote.feePercent}%)` : ""}</span><span>{quote ? formatAmount(quote.fee, currency) : "—"}</span></div>
               <div className="quote-total"><span>Total to pay</span><strong>{quote ? formatAmount(quote.total, currency) : "—"}</strong></div>
             </div>
             {checkoutError && <p className="form-error checkout-error" role="alert">{checkoutError}</p>}
-            <button className="primary-button" type="submit" disabled={preparing}>{preparing ? "Loading payment options…" : "Continue to payment"} {!preparing && <ArrowIcon />}</button>
+            <button className="primary-button" type="submit" disabled={preparing || !quote}>{preparing ? "Loading payment options…" : "Continue to payment"} {!preparing && <ArrowIcon />}</button>
             <p className="panel-footnote">Choose your payment method in the next step.</p>
           </form>
         ) : (
           <>
             <h2 className="panel-title" ref={paymentTitleRef} tabIndex={-1}>One step from momentum.</h2>
-            <p className="panel-description">Complete your top-up securely with Whop.</p>
+            <p className="panel-description">Complete your lead order securely with Whop.</p>
             <div className="payment-summary">
-              <div><span>Ad spend top-up</span><span>{formatAmount(dollars, currency)}</span></div>
-              <div className="fee-summary-row"><span>Ad spend fee ({feePercent}%)</span><span>{quote ? formatAmount(quote.fee, currency) : "—"}</span></div>
+              <div><span>{selectedState?.name} · {leadCount} {leadCount === 1 ? "lead" : "leads"}</span><span>{quote ? formatAmount(quote.amount, currency) : "—"}</span></div>
+              <div className="fee-summary-row"><span>Service fee ({feePercent}%)</span><span>{quote ? formatAmount(quote.fee, currency) : "—"}</span></div>
               <div className="quote-total"><span>USD total</span><strong>{quote ? formatAmount(quote.total, currency) : "—"}</strong></div>
-              <button className="text-button" type="button" onClick={changeAmount} disabled={preparing || completed}>Change amount or fee</button>
+              <button className="text-button" type="button" onClick={changeAmount} disabled={preparing || completed}>Change state, leads or fee</button>
             </div>
             {configured && planId && quote ? (
               <>
@@ -262,7 +253,7 @@ export default function TopUp() {
               <div className="configuration-notice" role="status">
                 <LockIcon />
                 <h3>Payments are being connected.</h3>
-                <p>Please check back shortly to complete your top-up.</p>
+                <p>Please check back shortly to complete your lead order.</p>
               </div>
             )}
           </>

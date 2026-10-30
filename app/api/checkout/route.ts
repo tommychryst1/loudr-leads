@@ -1,17 +1,17 @@
 import { WhopClient } from "@whop/sdk";
 import { unstable_cache } from "next/cache";
-import { calculateTopUp, isValidAmount, isValidFeePercent } from "@/lib/top-up";
+import { calculateLeadQuote } from "@/lib/lead-pricing";
 import { getTopUpPlan } from "@/lib/whop-plans";
 
 export const runtime = "nodejs";
 
 // Share successful plan lookups across requests and function cold starts. Credentials
 // stay inside the resolver; the cache contains only the public plan ID for this price.
-const resolvePlanId = unstable_cache(async (accountId: string, productId: string, amount: number, feePercent: number, forceUsd: boolean) => {
+const resolvePlanId = unstable_cache(async (accountId: string, productId: string, state: string, leadCount: number, feePercent: number, forceUsd: boolean) => {
   const whop = new WhopClient({ token: process.env.WHOP_API_KEY! });
-  const plan = await getTopUpPlan(whop, accountId, productId, calculateTopUp(amount, feePercent), forceUsd);
+  const plan = await getTopUpPlan(whop, accountId, productId, calculateLeadQuote(state, leadCount, feePercent), forceUsd);
   return plan.id;
-}, ["top-up-adaptive-checkout-v4"], { revalidate: 300 });
+}, ["loudr-lead-checkout-v1"], { revalidate: 300 });
 
 export async function POST(request: Request) {
   let body: unknown;
@@ -21,19 +21,18 @@ export async function POST(request: Request) {
     return Response.json({ error: "Enter a valid JSON request body." }, { status: 400 });
   }
   const input = typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
-  const { amount, feePercent } = input;
+  const { state, leadCount, feePercent } = input;
   const currency = input.currency ?? "usd";
   const forceUsd = input.forceUsd ?? false;
-  if (!isValidAmount(amount)) {
-    return Response.json({ error: "Top-up amount must be between 100 and 500,000 in the chosen currency, with no more than two decimal places." }, { status: 400 });
-  }
-  if (!isValidFeePercent(feePercent)) {
-    return Response.json({ error: "Ad spend fee must be between 2.5% and 5%, with no more than two decimal places." }, { status: 400 });
-  }
   if (currency !== "usd" || typeof forceUsd !== "boolean") {
-    return Response.json({ error: "Top-ups are priced in USD. Whop handles local-currency conversion at checkout." }, { status: 400 });
+    return Response.json({ error: "Leads are priced in USD. Whop handles local-currency conversion at checkout." }, { status: 400 });
   }
-  const quote = calculateTopUp(amount, feePercent);
+  let quote;
+  try {
+    quote = calculateLeadQuote(state, leadCount, feePercent);
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "Invalid lead order." }, { status: 400 });
+  }
 
   const token = process.env.WHOP_API_KEY;
   const accountId = process.env.WHOP_ACCOUNT_ID;
@@ -42,7 +41,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "Payments are temporarily unavailable. Please try again later." }, { status: 503 });
   }
   try {
-    const planId = await resolvePlanId(accountId, productId, quote.amount, quote.feePercent, forceUsd);
+    const planId = await resolvePlanId(accountId, productId, quote.state, quote.leadCount, quote.feePercent, forceUsd);
     return Response.json({ planId, quote, forceUsd }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const err = error as { error?: { message?: string }; message?: string };
