@@ -1,5 +1,6 @@
 import Brand from "@/components/Brand";
 import TopUp from "@/components/TopUp";
+import "./admin/admin.css";
 
 export default function Home() {
   return (
@@ -7,7 +8,10 @@ export default function Home() {
       <a href="#top-up" className="skip-link">Skip to lead selection</a>
       <header className="site-header">
         <Brand />
-        <span className="header-note"><span className="status-dot" /> Client lead orders</span>
+        <nav className="site-header-actions" aria-label="Main navigation">
+          <span className="header-note"><span className="status-dot" /> Client lead orders</span>
+          <a className="admin-entry-button" href="/admin">Admin</a>
+        </nav>
       </header>
 
       <main className="main-grid">

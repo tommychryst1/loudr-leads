@@ -1,17 +1,19 @@
 import { WhopClient } from "@whop/sdk";
 import { unstable_cache } from "next/cache";
-import { calculateLeadQuote, requestedLeadCount } from "@/lib/lead-pricing";
+import { calculateLeadQuote, requestedLeadCount, type LeadQuote } from "@/lib/lead-pricing";
 import { getTopUpPlan } from "@/lib/whop-plans";
+
+import { readRateCard } from "@/lib/pricing-store";
 
 export const runtime = "nodejs";
 
 // Share successful plan lookups across requests and function cold starts. Credentials
 // stay inside the resolver; the cache contains only the public plan ID for this price.
-const resolvePlanId = unstable_cache(async (accountId: string, productId: string, state: string, leadCount: number, forceUsd: boolean) => {
+const resolvePlanId = unstable_cache(async (accountId: string, productId: string, quote: LeadQuote, forceUsd: boolean) => {
   const whop = new WhopClient({ token: process.env.WHOP_API_KEY! });
-  const plan = await getTopUpPlan(whop, accountId, productId, calculateLeadQuote(state, leadCount), forceUsd);
+  const plan = await getTopUpPlan(whop, accountId, productId, quote, forceUsd);
   return plan.id;
-}, ["loudr-lead-checkout-v2"], { revalidate: 300 });
+}, ["loudr-lead-checkout-dynamic-v1"], { revalidate: 300 });
 
 export async function POST(request: Request) {
   let body: unknown;
@@ -27,9 +29,15 @@ export async function POST(request: Request) {
   if (currency !== "usd" || typeof forceUsd !== "boolean") {
     return Response.json({ error: "Leads are priced in USD. Whop handles local-currency conversion at checkout." }, { status: 400 });
   }
+  let card;
+  try { card = await readRateCard(); }
+  catch { return Response.json({ error: "Pricing is temporarily unavailable. Please try again." }, { status: 503 }); }
+  if (input.priceVersion !== undefined && input.priceVersion !== card.version) {
+    return Response.json({ error: "Prices have changed. Review the updated total and continue again.", rateCard: card }, { status: 409, headers: { "Cache-Control": "no-store" } });
+  }
   let quote;
   try {
-    quote = calculateLeadQuote(state, requestedLeadCount(input));
+    quote = calculateLeadQuote(state, requestedLeadCount(input), card.states);
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Invalid lead order." }, { status: 400 });
   }
@@ -41,8 +49,8 @@ export async function POST(request: Request) {
     return Response.json({ error: "Payments are temporarily unavailable. Please try again later." }, { status: 503 });
   }
   try {
-    const planId = await resolvePlanId(accountId, productId, quote.state, quote.leadCount, forceUsd);
-    return Response.json({ planId, quote, forceUsd }, { headers: { "Cache-Control": "no-store" } });
+    const planId = await resolvePlanId(accountId, productId, quote, forceUsd);
+    return Response.json({ planId, quote, forceUsd, priceVersion: card.version }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const err = error as { error?: { message?: string }; message?: string };
     return Response.json({ error: err?.error?.message ?? err?.message ?? "Unable to load payment options." }, { status: 502 });

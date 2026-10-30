@@ -6,11 +6,12 @@ const leads = loadTypeScript('lib/lead-pricing.ts', { '@/lib/top-up': pricing })
 const preferences = loadTypeScript('lib/payment-methods.ts');
 const plans = loadTypeScript('lib/whop-plans.ts', { '@/lib/payment-methods': preferences, '@/lib/top-up': pricing, '@/lib/lead-pricing': leads });
 const env = { WHOP_API_KEY: 'test-key', WHOP_ACCOUNT_ID: 'biz_test', WHOP_LEADS_PRODUCT_ID: 'prod_test', NEXT_PUBLIC_SITE_URL: 'https://example.com' };
+const pricingStore = { readRateCard: async () => ({ version: 'initial', updatedAt: null, states: leads.LEAD_STATES }) };
 const request = (body) => new Request('https://example.com/api/test', { method: 'POST', body: JSON.stringify(body) });
 function checkoutRoute() {
   const calls = [];
   const { POST } = loadTypeScript('app/api/checkout/route.ts', {
-    '@/lib/top-up': pricing, '@/lib/lead-pricing': leads,
+    '@/lib/top-up': pricing, '@/lib/lead-pricing': leads, '@/lib/pricing-store': pricingStore,
     '@/lib/whop-plans': { getTopUpPlan: async (_, account, product, quote, forceUsd) => { calls.push({ account, product, quote, forceUsd }); return { id: 'plan_test' }; } },
     '@whop/sdk': { WhopClient: class {} }, 'next/cache': { unstable_cache: (fn) => fn },
   }, { process: { env } });
@@ -24,7 +25,7 @@ function payRoute(planChange = {}) {
   const client = { confirmationTokens: { retrieve: async () => ({ status: 'pending' }) }, plans: { retrieve: async () => plan },
     payments: { create: async (input) => { charges.push(input); return { id: 'pay_test', status: 'pending' }; } } };
   const { POST } = loadTypeScript('app/api/pay/route.ts', {
-    '@/lib/top-up': pricing, '@/lib/lead-pricing': leads, '@/lib/whop-plans': plans,
+    '@/lib/top-up': pricing, '@/lib/lead-pricing': leads, '@/lib/whop-plans': plans, '@/lib/pricing-store': pricingStore,
     '@whop/sdk': { WhopClient: class { constructor() { return client; } } },
   }, { process: { env } });
   return { POST, charges };
@@ -93,7 +94,7 @@ test('both endpoints reject sold-out states, invalid counts and old amount-only 
   }
 });
 test('charge rejects another lead order even when its monetary total matches', async () => {
-  for (const replacement of [leads.calculateLeadQuote('HI', 10, 2.5), leads.calculateLeadQuote('VT', 10, 2.5)]) {
+  for (const replacement of [leads.calculateLeadQuote('HI', 10), leads.calculateLeadQuote('VT', 10)]) {
     const { POST, charges } = payRoute({ metadata: leads.leadMetadata(replacement) });
     assert.equal((await POST(request(validPayment))).status, 400);
     assert.equal(charges.length, 0);

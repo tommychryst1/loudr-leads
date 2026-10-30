@@ -8,8 +8,8 @@ test('all 50 state prices match the supplied rate card', () => {
   assert.equal(LEAD_STATES.length, 50);
   assert.deepEqual(Object.fromEntries(LEAD_STATES.map(({code, price}) => [code, price])), expected);
   for (const [state, price] of Object.entries(expected)) {
-    if (price === null) { assert.throws(() => calculateLeadQuote(state, 1, 2.5)); continue; }
-    const quote = calculateLeadQuote(state, 25, 2.5);
+    if (price === null) { assert.throws(() => calculateLeadQuote(state, 1)); continue; }
+    const quote = calculateLeadQuote(state, 25);
     assert.equal(quote.amount, price * 25);
     assert.equal(quote.unitPrice, price);
     assert.equal(quote.feeCents, 0);
@@ -17,17 +17,17 @@ test('all 50 state prices match the supplied rate card', () => {
   }
 });
 test('rejects sold-out states, missing states, fractional/invalid counts and oversized orders', () => {
-  for (const state of ['CA', 'DC', 'tx', '', undefined, null, 1]) assert.throws(() => calculateLeadQuote(state, 1, 2.5));
-  for (const count of [undefined, null, '1', 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER]) assert.throws(() => calculateLeadQuote('TX', count, 2.5));
-  assert.equal(calculateLeadQuote('TX', 1000, 5).amount, 500000);
-  assert.throws(() => calculateLeadQuote('TX', 1001, 5));
+  for (const state of ['CA', 'DC', 'tx', '', undefined, null, 1]) assert.throws(() => calculateLeadQuote(state, 1));
+  for (const count of [undefined, null, '1', 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER]) assert.throws(() => calculateLeadQuote('TX', count));
+  assert.equal(calculateLeadQuote('TX', 1000).amount, 500000);
+  assert.throws(() => calculateLeadQuote('TX', 1001));
   assert.equal(calculateLeadQuote('HI', 1000).amount, 100000);
   assert.throws(() => calculateLeadQuote('HI', 1001));
 });
 test('same total across states or counts remains a distinct order identity', () => {
-  const tx = calculateLeadQuote('TX', 1, 2.5);
-  const hi = calculateLeadQuote('HI', 5, 2.5);
-  const vt = calculateLeadQuote('VT', 5, 2.5);
+  const tx = calculateLeadQuote('TX', 1);
+  const hi = calculateLeadQuote('HI', 5);
+  const vt = calculateLeadQuote('VT', 5);
   assert.equal(tx.total, hi.total);
   assert.notEqual(leadQuoteKey(tx), leadQuoteKey(hi));
   assert.notEqual(leadQuoteKey(hi), leadQuoteKey(vt));

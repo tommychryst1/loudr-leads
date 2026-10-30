@@ -2,6 +2,8 @@ import { WhopClient } from "@whop/sdk";
 import { calculateLeadQuote, leadMetadata, requestedLeadCount } from "@/lib/lead-pricing";
 import { isTopUpPlanForAmount } from "@/lib/whop-plans";
 
+import { readRateCard } from "@/lib/pricing-store";
+
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
@@ -21,9 +23,15 @@ export async function POST(request: Request) {
   if (currency !== "usd" || typeof forceUsd !== "boolean") {
     return Response.json({ error: "Leads are priced in USD. Whop handles local-currency conversion at checkout." }, { status: 400 });
   }
+  let card;
+  try { card = await readRateCard(); }
+  catch { return Response.json({ error: "Pricing is temporarily unavailable. Please try again." }, { status: 503 }); }
+  if (input.priceVersion !== undefined && input.priceVersion !== card.version) {
+    return Response.json({ error: "Prices have changed. Please reload payment options." }, { status: 409 });
+  }
   let quote;
   try {
-    quote = calculateLeadQuote(state, requestedLeadCount(input));
+    quote = calculateLeadQuote(state, requestedLeadCount(input), card.states);
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Invalid lead order." }, { status: 400 });
   }

@@ -5,10 +5,10 @@ import { loadWhop } from "@whop/elements";
 import { Checkout, CheckoutElement, WhopElements } from "@whop/elements-react";
 import { ArrowIcon, LockIcon } from "@/components/Icons";
 import { formatAmount } from "@/lib/top-up";
-import { calculateLeadQuote, LEAD_STATES, MAX_LEAD_QUANTITY, leadMetadata, leadQuoteKey, type LeadQuote } from "@/lib/lead-pricing";
+import { calculateLeadQuote, MAX_LEAD_QUANTITY, leadMetadata, type LeadQuote } from "@/lib/lead-pricing";
 import { isValidLeadCount } from "@/lib/leads";
 import LeadSelector from "@/components/LeadSelector";
-import { createPlanPreparer } from "@/lib/checkout-preparation";
+import type { RateCard } from "@/lib/rate-card";
 
 const appearance = {
   theme: { appearance: "dark" as const, accentColor: "yellow" as const, grayColor: "gray" as const },
@@ -26,6 +26,9 @@ function errorMessage(error: unknown): string {
 }
 
 export default function TopUp() {
+  const [rateCard, setRateCard] = useState<RateCard | null>(null);
+  const [pricingError, setPricingError] = useState<string | null>(null);
+  const [pricingRetry, setPricingRetry] = useState(0);
   const [value, setValue] = useState("");
   const [state, setState] = useState("");
   const [stateTouched, setStateTouched] = useState(false);
@@ -45,14 +48,20 @@ export default function TopUp() {
   const preparingRef = useRef(false);
   const [loadError, setLoadError] = useState<{ retry: () => void } | null>(null);
   const [elements, setElements] = useState<ReturnType<typeof loadWhop> | null>(null);
-  const [preparePlan] = useState(() => createPlanPreparer<LeadQuote>(async (quote, forceUsd) => {
+  async function preparePlan(quote: LeadQuote, forceUsd = false) {
     const result = await fetch("/api/checkout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state: quote.state, quantity: quote.leadCount, forceUsd }),
+      body: JSON.stringify({ state: quote.state, quantity: quote.leadCount, forceUsd, priceVersion: rateCard?.version }),
       signal: AbortSignal.timeout(15_000),
     });
     const response = await result.json();
+    if (result.status === 409 && response.rateCard) {
+      setRateCard(response.rateCard);
+      setPlanId(null);
+      setStep("amount");
+      throw new Error(response.error || "Prices changed. Review the new total and continue again.");
+    }
     if (!result.ok || typeof response.planId !== "string" || !/^plan_[a-zA-Z0-9]+$/.test(response.planId) ||
       response.quote?.state !== quote.state || response.quote?.leadCount !== quote.leadCount || response.quote?.unitPrice !== quote.unitPrice ||
       response.quote?.totalCents !== quote.totalCents || response.quote?.amountCents !== quote.amountCents ||
@@ -60,17 +69,17 @@ export default function TopUp() {
       throw new Error(response.error || "We couldn’t load payment options. Please try again.");
     }
     return response.planId as string;
-  }, leadQuoteKey));
+  }
   const inputRef = useRef<HTMLInputElement>(null);
   const paymentTitleRef = useRef<HTMLHeadingElement>(null);
   const leadCount = Number(value);
-  const selectedState = LEAD_STATES.find((item) => item.code === state);
+  const selectedState = rateCard?.states.find((item) => item.code === state);
   const maxLeads = MAX_LEAD_QUANTITY;
-  const stateError = stateTouched && !selectedState ? "Choose a state to see your price." : selectedState?.price === null ? "California is sold out. Please choose another state." : null;
+  const stateError = stateTouched && !selectedState ? "Choose a state to see your price." : selectedState?.price === null ? `${selectedState.name} is sold out. Please choose another state.` : null;
   const quote = useMemo(() => {
-    try { return calculateLeadQuote(state, leadCount); }
+    try { return rateCard ? calculateLeadQuote(state, leadCount, rateCard.states) : null; }
     catch { return null; }
-  }, [state, leadCount]);
+  }, [state, leadCount, rateCard]);
   const checkoutMetadata = useMemo(() => quote ? { ...leadMetadata(quote, forceUsd), order_id: orderId } : undefined, [quote, forceUsd, orderId]);
   const error = (touched ? amountError(value, maxLeads) : null);
   const accountId = process.env.NEXT_PUBLIC_WHOP_ACCOUNT_ID;
@@ -83,11 +92,27 @@ export default function TopUp() {
   }, [configured]);
 
   useEffect(() => {
-    if (!configured || step !== "amount" || !quote) return;
-    // Wait for typing to settle; Continue shares this request if it is still in flight.
-    const timer = setTimeout(() => { void preparePlan(quote).catch(() => {}); }, 400);
-    return () => clearTimeout(timer);
-  }, [configured, quote, preparePlan, step]);
+    if (step !== "amount") return;
+    const controller = new AbortController();
+    let busy = false;
+    async function refresh() {
+      if (busy || preparingRef.current || document.visibilityState === "hidden") return;
+      busy = true;
+      try {
+        const response = await fetch("/api/prices", { cache: "no-store", signal: controller.signal });
+        const next: RateCard = await response.json();
+        if (!response.ok || !Array.isArray(next.states) || typeof next.version !== "string") throw new Error("Unable to load current prices. Please retry.");
+        if (!controller.signal.aborted && !preparingRef.current) { setRateCard(next); setPricingError(null); }
+      } catch (error) {
+        if (!controller.signal.aborted) setPricingError(errorMessage(error));
+      } finally { busy = false; }
+    }
+    void refresh();
+    const timer = setInterval(() => { void refresh(); }, 30_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { controller.abort(); clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [step, pricingRetry]);
 
   useEffect(() => {
     if (step === "payment") paymentTitleRef.current?.focus();
@@ -102,12 +127,21 @@ export default function TopUp() {
       inputRef.current?.focus();
       return;
     }
-    if (!quote) { inputRef.current?.focus(); return; }
+    if (!quote || !rateCard || pricingError) { inputRef.current?.focus(); return; }
     if (preparingRef.current) return;
     preparingRef.current = true;
     setPreparing(true);
     setCheckoutError(null);
     try {
+      if (!configured) {
+        const response = await fetch("/api/prices", { cache: "no-store" });
+        const current: RateCard = await response.json();
+        if (!response.ok) throw new Error("Unable to check current prices. Please retry.");
+        if (current.version !== rateCard.version) {
+          setRateCard(current);
+          throw new Error("Prices have changed. Review the updated total and continue again.");
+        }
+      }
       if (configured) {
         setPlanId(await preparePlan(quote));
         setForceUsd(false);
@@ -164,13 +198,15 @@ export default function TopUp() {
             <h2 className="panel-title">Make room for more.</h2>
             <p className="panel-description">Choose your state and how many leads you’d like.</p>
 
+            {!rateCard && !pricingError && <p role="status" className="panel-footnote">Loading current prices…</p>}
+            {pricingError && <div role="alert"><p className="form-error">{pricingError}</p><button type="button" className="text-button" onClick={() => setPricingRetry((n) => n + 1)}>Retry prices</button></div>}
             <label className="state-label" htmlFor="lead-state">Your state</label>
-            <select id="lead-state" className="state-field" ref={stateRef} value={state} disabled={preparing}
+            <select id="lead-state" className="state-field" ref={stateRef} value={state} disabled={preparing || !rateCard}
               onChange={(event) => { setState(event.target.value); setStateTouched(true); setCheckoutError(null); }}
               onBlur={() => setStateTouched(true)} aria-invalid={Boolean(stateError)}
               aria-describedby={stateError ? "state-error" : undefined}>
               <option value="" disabled>Select your state</option>
-              {LEAD_STATES.map((item) => <option key={item.code} value={item.code} disabled={item.price === null}>
+              {rateCard?.states.map((item) => <option key={item.code} value={item.code} disabled={item.price === null}>
                 {item.name} ({item.code}) — {item.price === null ? "Sold out" : `${formatAmount(item.price)} / lead`}
               </option>)}
             </select>
@@ -184,7 +220,7 @@ export default function TopUp() {
               <div className="quote-total"><span>Total to pay</span><strong>{quote ? formatAmount(quote.total, currency) : "—"}</strong></div>
             </div>
             {checkoutError && <p className="form-error checkout-error" role="alert">{checkoutError}</p>}
-            <button className="primary-button" type="submit" disabled={preparing || !quote}>{preparing ? "Loading payment options…" : "Continue to payment"} {!preparing && <ArrowIcon />}</button>
+            <button className="primary-button" type="submit" disabled={preparing || !quote || Boolean(pricingError)}>{preparing ? "Loading payment options…" : "Continue to payment"} {!preparing && <ArrowIcon />}</button>
             <p className="panel-footnote">Choose your payment method in the next step.</p>
           </form>
         ) : (

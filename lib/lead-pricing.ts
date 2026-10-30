@@ -56,21 +56,24 @@ export const LEAD_STATES = [
 ] as const;
 
 export type LeadState = typeof LEAD_STATES[number]["code"];
+export type LeadRate = { code: LeadState; name: string; price: number | null };
 export type LeadQuote = TopUpQuote & { state: LeadState; stateName: string; leadCount: number; unitPrice: number; quantity: number; pricePerLead: number };
 
 export function isValidLeadState(value: unknown): value is LeadState {
   return typeof value === "string" && LEAD_STATES.some((state) => state.code === value);
 }
 
-export function calculateLeadQuote(state: unknown, leadCount: unknown): LeadQuote {
-  const selection = LEAD_STATES.find((item) => item.code === state);
+export function calculateLeadQuote(state: unknown, leadCount: unknown, rates: readonly LeadRate[] = LEAD_STATES): LeadQuote {
+  const selection = rates.find((item) => item.code === state);
   if (!selection) throw new Error("Choose a valid state.");
-  if (selection.price === null) throw new Error("California leads are currently sold out. Please choose another state.");
+  if (selection.price === null) throw new Error(`${selection.name} leads are currently sold out. Please choose another state.`);
   if (typeof leadCount !== "number" || !Number.isSafeInteger(leadCount) || leadCount < 1) {
     throw new Error("Enter a whole number of leads, starting at 1.");
   }
   if (leadCount > MAX_LEAD_QUANTITY) throw new Error(`The maximum order is ${MAX_LEAD_QUANTITY.toLocaleString("en-US")} leads.`);
-  const amountCents = selection.price * 100 * leadCount;
+  if (!Number.isFinite(selection.price) || selection.price <= 0 || selection.price > 10_000 ||
+    Math.abs(selection.price * 100 - Math.round(selection.price * 100)) > 0.000001) throw new Error("Invalid state price.");
+  const amountCents = Math.round(selection.price * 100) * leadCount;
   return { currency: "usd", amountCents, totalCents: amountCents, feeCents: 0, feeBasisPoints: 0,
     amount: amountCents / 100, total: amountCents / 100, feePercent: 0, fee: 0,
     state: selection.code, stateName: selection.name, leadCount, unitPrice: selection.price, quantity: leadCount, pricePerLead: selection.price };

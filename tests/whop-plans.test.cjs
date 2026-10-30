@@ -100,8 +100,8 @@ test('forced USD plans can be reused only for the forced USD mode', async () => 
 });
 
 test('lead plans separate state/count identities at equal totals and preserve server-authored metadata', async () => {
-  const quote = leads.calculateLeadQuote('TX', 1, 2.5);
-  const other = leads.calculateLeadQuote('HI', 5, 2.5);
+  const quote = leads.calculateLeadQuote('TX', 1);
+  const other = leads.calculateLeadQuote('HI', 5);
   const wrongOrder = planFor(other, { metadata: leads.leadMetadata(other) });
   const oldTopup = planFor(quote);
   const client = mockClient([wrongOrder, oldTopup]);
