@@ -50,7 +50,7 @@ The Wire & ACH checkout enables only `bank_wire` and `us_bank_account`, and uses
 
 Production: `https://loudr-leads.vercel.app`, project `prj_laSEpueJ84xcCcFItcwPSWCFTnc1`, team `team_nJJFw2mdvFrhMqsbZGUEOqsc` (Tommy Chryst's projects). Deploy only to this project for this repository. The older repository README's Unlimited Scaling project is unrelated to this release.
 
-The signed `payment.succeeded` webhook logs payment metadata only. It does **not** deliver leads or credit balances. Fulfillment must retrieve and verify the payment and server-authored plan, map the buyer, and deduplicate durable work on `payment.id`. Checkout-provided metadata and return-page query parameters are not fulfillment authority.
+The signed `payment.succeeded` webhook retrieves the payment and merchant-created plan from Whop, verifies a paid order for the configured business/product, and sends a Slack alert containing state, quantity, quoted USD order total, payment choice and payment ID. Checkout-provided metadata and return-page query parameters are not authority. Notifications do **not** deliver leads or credit balances.
 
 Unit tests validate pricing, unavailable states, quantity boundaries, card-fee rounding, bank/card restrictions, cache separation and plan verification. A production build is required before deployment. Payment verification must not create a real buyer charge merely to test a release.
 
@@ -73,3 +73,18 @@ The admin now requires a server-verified username and password at `/admin/login`
 Login allows up to 10 attempts per client IP in each five-minute window. Production counters use conditional writes in the existing private Blob store, under HMAC-derived names that do not expose raw IP addresses. If that store is unavailable, sign-in fails closed; local development without storage uses a bounded in-memory counter.
 
 Whop OAuth and live team-membership authorization are deferred in favor of the requested temporary shared login. The current merchant key can read joined team members, but creating an OAuth app requires `developer:create_app`; webhook configuration inspection requires `developer:manage_webhook`. A future Whop login must verify the authenticated user against joined team members of `biz_HqBscEcuZxTgaf`, not paid customer memberships.
+
+
+## Paid-order Slack alerts
+
+Each checkout plan represents a complete state/quantity/price/payment-method order. Buying five leads purchases that one order plan; its metadata records `quantity: "5"`. Admin price edits produce new price-specific plans without changing earlier orders. Notification details use the purchased plan, not today's editable prices.
+
+Before deploying this integration:
+
+1. Create a Slack Incoming Webhook for the intended channel and set its URL as the Vercel production secret `SLACK_LEAD_ORDERS_WEBHOOK_URL`.
+2. Configure the Loudr Media Whop webhook for `payment.succeeded` at `https://loudr-leads.vercel.app/api/webhooks/whop`. Its signing secret must match `WHOP_WEBHOOK_SECRET`. The API key must be able to retrieve payments and plans.
+3. Deploy, then verify delivery using a real paid order/replayed paid-order event. No synthetic event with an invented payment ID can pass payment verification. The current API key lacks webhook-management permission, so dashboard configuration must be confirmed separately.
+
+The handler waits for delivery before returning success. Missing configuration, dependency failures or an in-progress delivery return 503 for Whop to retry. Pending bank transfers are not announced as paid. Unrelated businesses/products are ignored.
+
+Delivery receipts live privately under `notifications/slack/<payment-id>.json`. Conditional writes serialize concurrent attempts; completed receipts suppress normal duplicates. Incoming webhooks cannot guarantee exactly-once delivery across a Slack timeout or a failure recording success after Slack accepted the message. Such a retry may duplicate the alert; the stable payment ID identifies the same order. Receipt retry leases expire after two minutes. Monitor failed Whop deliveries and replay them after resolving configuration or provider failures; there is no independent background retry queue.
